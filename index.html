@@ -1366,14 +1366,14 @@ PAGINAS['/avaliacao'] = () => {
   if(!temCadastro()) return semCadastro();
   if(S.finalizado) return telaFinalizado();
   const j = S.jornada = proximaEtapa();
-  const lista = qs(j), jd = JORNADAS[j-1];
+  const lista = questoesDaEtapa(j), jd = jornadaAtual(j);
   if(S.indice >= lista.length) S.indice = 0;
   const q = lista[S.indice];
-  const feitas = respondidas(j);
+  const feitas = respondidasEtapa(j);
   return `
   <div class="aval-topo"><div class="wrap">
     <div style="min-width:180px">
-      <div class="coord">Etapa ${j} de 5</div>
+      <div class="coord">Etapa ${j} de ${totalEtapas()}</div>
       <b style="font-family:var(--disp)">${jd.titulo}</b>
     </div>
     <div class="barra"><i style="width:${Math.round(100*feitas/lista.length)}%"></i></div>
@@ -1383,7 +1383,7 @@ PAGINAS['/avaliacao'] = () => {
 
   <div class="wrap" style="padding-top:1.4rem">
     <div class="pontos">${lista.map((x,i)=>`<b class="${S.respostas[x.id]!==undefined?'ok':''} ${i===S.indice?'aqui':''}" onclick="irQuestao(${i})" title="Questão ${i+1}">${i+1}</b>`).join('')}</div>
-    ${cartaoQuestao(q, S.indice, lista.length)}
+    ${cartaoAplicacao(q, S.indice, lista.length)}
     <div class="nav-q">
       <button class="btn btn-sec" ${S.indice===0?'disabled':''} onclick="irQuestao(${S.indice-1})">Voltar</button>
       <span style="align-self:center;color:var(--tinta2);font-size:.85rem">${feitas} de ${lista.length} respondidas nesta etapa</span>
@@ -1394,11 +1394,14 @@ PAGINAS['/avaliacao'] = () => {
   </div>`;
 };
 
-function cartaoQuestao(q, i, total){
+function cartaoAplicacao(q, i, total){
   const r = S.respostas[q.id];
   let corpo = '';
-  if(q.t==='escala'){
-    corpo = `<div class="ops">${ESCALA.map((t,k)=>`
+  /* o Fundamental usa escala de quatro pontos e guarda o enunciado em q.q */
+  const fund = ehFundamental();
+  const escalaTxt = fund ? ESCALA_F : ESCALA;
+  if(q.t==='escala' || q.t==='ctx'){
+    corpo = `<div class="ops">${escalaTxt.map((t,k)=>`
       <label class="op ${r===k?'sel':''}"><input type="radio" name="q" ${r===k?'checked':''} onchange="responder('${q.id}',${k})"><span>${t}</span></label>`).join('')}</div>`;
   } else if(q.t==='ordem'){
     const ordem = Array.isArray(r)? r : (parcialOrdem[q.id]||[]);
@@ -1411,13 +1414,17 @@ function cartaoQuestao(q, i, total){
     corpo = `<div class="ops">${q.ops.map((o,k)=>`
       <label class="op ${r===k?'sel':''}"><input type="radio" name="q" ${r===k?'checked':''} onchange="responder('${q.id}',${k})"><span>${o.t}</span></label>`).join('')}</div>`;
   }
+  const enunciado = fund ? q.q : q.txt;
+  const rotuloEixo = fund
+    ? (q.t==='ctx' ? 'sobre a escola' : ((EIXOS_F.find(e=>e.n===q.e)||{}).t || ''))
+    : q.eixo;
   return `<div class="questao">
     <div style="display:flex;justify-content:space-between;gap:1rem;align-items:center">
       <span class="coord">Questão ${i+1} de ${total} · ${q.id}</span>
-      <span class="tag">${q.eixo}</span>
+      <span class="tag">${rotuloEixo}</span>
     </div>
-    ${q.ctx? `<div class="ctx">${q.ctx}</div>`:''}
-    <p class="txt">${q.txt}</p>
+    ${q.t==='ctx'? `<div class="ctx">Esta pergunta é sobre a escola, não sobre você. Ela não entra no seu resultado.</div>` : (q.ctx? `<div class="ctx">${q.ctx}</div>`:'')}
+    <p class="txt">${enunciado}</p>
     ${corpo}
   </div>`;
 }
@@ -1433,10 +1440,10 @@ function ordenar(id,k){
 }
 function limparOrdem(id){ delete S.respostas[id]; parcialOrdem[id]=[]; salvarBreve(); render(); }
 function atualizaMarcas(){
-  const lista = qs(S.jornada);
+  const lista = questoesDaEtapa(S.jornada);
   document.querySelectorAll('.pontos b').forEach((b,i)=>{ b.classList.toggle('ok', S.respostas[lista[i].id]!==undefined); });
   document.querySelectorAll('.op').forEach(el=>{ const inp = el.querySelector('input'); if(inp) el.classList.toggle('sel', inp.checked); });
-  const feitas = respondidas(S.jornada);
+  const feitas = respondidasEtapa(S.jornada);
   const barra = document.querySelector('.barra i'); if(barra) barra.style.width = Math.round(100*feitas/lista.length)+'%';
 }
 function irQuestao(i){ S.indice = i; salvar(true); render(); window.scrollTo({top:0,behavior:'smooth'}); }
@@ -1449,7 +1456,7 @@ function pausar(){
 /* ---------------- revisão da etapa ---------------- */
 PAGINAS['/revisao'] = () => {
   if(!temCadastro()) return semCadastro();
-  const j = S.jornada, lista = qs(j), feitas = respondidas(j);
+  const j = S.jornada, lista = questoesDaEtapa(j), feitas = respondidasEtapa(j);
   const pendentes = lista.map((q,i)=>({q,i})).filter(x=>S.respostas[x.q.id]===undefined);
   return `<section class="sec"><div class="wrap" style="max-width:760px">
     <p class="eyebrow">Etapa ${j} — ${JORNADAS[j-1].titulo}</p>
@@ -1482,16 +1489,24 @@ function concluirEtapa(){
 }
 
 PAGINAS['/etapa-concluida'] = () => {
+  /* acessada fora do fluxo, sem etapa concluída, a tela redireciona */
+  if(!S.concluidas || !S.concluidas.length) return PAGINAS['/painel']();
   const j = Math.max(...S.concluidas), prox = j+1;
   const d = new Date(S.datasEtapas[j]||Date.now());
+  /* na última etapa não existe próxima jornada: a tela muda de mensagem */
+  const ultima = prox > JORNADAS.length;
   return `<section class="sec"><div class="wrap tela">
     <div class="selo">✓</div>
-    <h1 style="font-size:1.9rem">Etapa ${j} concluída e salva com sucesso.</h1>
-    <p class="apoio">Concluída em ${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}. A Etapa ${prox} foi liberada.</p>
-    <p class="lead" style="margin:1.4rem auto">Próxima etapa: <b>${JORNADAS[prox-1].titulo}</b> — ${JORNADAS[prox-1].sub}. Tempo estimado: ${JORNADAS[prox-1].tempo}.</p>
+    <h1 style="font-size:1.9rem">${ultima? 'Você concluiu todas as etapas.' : `Etapa ${j} concluída e salva com sucesso.`}</h1>
+    <p class="apoio">Concluída em ${d.toLocaleDateString('pt-BR')} às ${d.toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})}.${ultima? '' : ` A Etapa ${prox} foi liberada.`}</p>
+    ${ultima
+      ? `<p class="lead" style="margin:1.4rem auto">Seu relatório está pronto. Ele mostra o que apareceu nas suas respostas — não o que você é, e não uma nota.</p>`
+      : `<p class="lead" style="margin:1.4rem auto">Próxima etapa: <b>${JORNADAS[prox-1].titulo}</b> — ${JORNADAS[prox-1].sub}. Tempo estimado: ${JORNADAS[prox-1].tempo}.</p>`}
     <div class="acoes" style="justify-content:center">
-      <a class="btn btn-cta grande" href="#/avaliacao">Continuar para a Etapa ${prox}</a>
-      <a class="btn btn-sec" href="#/painel">Continuar depois</a>
+      ${ultima
+        ? `<a class="btn btn-cta grande" href="#/relatorio">Ver o meu relatório</a>`
+        : `<a class="btn btn-cta grande" href="#/avaliacao">Continuar para a Etapa ${prox}</a>`}
+      <a class="btn btn-sec" href="#/painel">${ultima? 'Voltar ao painel' : 'Continuar depois'}</a>
     </div>
   </div></section>`;
 };
@@ -3046,7 +3061,10 @@ PAGINAS['/gestor'] = () => {
     <p class="apoio">Credenciais, se preferir digitar: <b>gestor@mapa.org</b> / <b>mapa2026</b>.</p>
   </div></section>`;
 
-  const base = alunosDemo();
+  /* A base do painel passou a ser a escola inteira. Com 16 participantes,
+     qualquer busca combinando três ou mais características devolvia lista
+     vazia — o que fazia o recurso parecer quebrado quando estava correto. */
+  const base = escolaDemo();
   const escolas = ['todas'].concat([...new Set(base.map(a=>a.escola))]);
   const chave = ordenarGestor;
   const valor = a => ['total','p','l','c','e','d'].includes(chave)? a.ix[chave] : (a.pct[chave]||0);
@@ -3099,7 +3117,7 @@ PAGINAS['/gestor'] = () => {
         <thead><tr><th>#</th><th>Participante</th><th>Escola</th><th>Série</th><th>Índice</th><th>Pes</th><th>Lid</th><th>Cog</th><th>Éti</th><th>Dim</th>
         ${!['total','p','l','c','e','d'].includes(chave)? `<th>${IND[chave][0]}</th>`:''}
         <th>Tendência</th><th>Autorizações</th><th></th></tr></thead>
-        <tbody>${lista.map((a,i)=>`<tr>
+        <tbody>${lista.slice(0, limiteLista).map((a,i)=>`<tr>
           <td style="font-family:var(--mono);color:var(--tinta2)">${i+1}</td>
           <td><b>${esc(a.nome)}</b><br><span style="font-size:.78rem;color:var(--tinta2)">${a.codigo} · ${a.concluido.toLocaleDateString('pt-BR')}</span></td>
           <td>${esc(a.escola)}</td><td>${esc(a.serie.replace(' do Ensino Médio',''))}</td>
@@ -3111,21 +3129,25 @@ PAGINAS['/gestor'] = () => {
           <td><button class="btn btn-sec btn-mini" onclick="verComoGestor(${base.indexOf(a)})">Ver relatório</button></td></tr>`).join('')}</tbody>
       </table>
     </div>
-    <p class="apoio">Cinco participantes simulados, com respostas geradas a partir de perfis diferentes. Todos os números vieram do mesmo motor de cálculo usado nos relatórios reais.</p>
+    ${lista.length > limiteLista? `<div style="text-align:center;margin-top:.9rem">
+      <button class="btn btn-sec btn-mini" onclick="limiteLista=${limiteLista+120};render()">Mostrar mais ${Math.min(120, lista.length-limiteLista)} de ${lista.length-limiteLista} restantes</button>
+      <button class="btn btn-sec btn-mini" onclick="limiteLista=99999;render()" style="margin-left:.4rem">Mostrar todos os ${lista.length}</button>
+    </div>`:''}
+    <p class="apoio">Base de demonstração com participantes simulados, gerados a partir de perfis de turma diferentes. Todos os números vieram do mesmo motor de cálculo usado nos relatórios reais.${lista.length>limiteLista? ' Exibindo os '+limiteLista+' primeiros para manter a tela leve.':''}</p>
 
     <div class="divisor"></div>
     <h2>Leitura do grupo</h2>
     <div class="rgrid d2">
       <div class="gcard"><header>${ico('grafico')}<h3>Índice geral por participante</h3></header>
         <p class="sub">Comparação interna. Não é divulgada aos estudantes.</p>
-        ${lista.map(a=>`<div class="bi"><span style="color:var(--turq)">${ico('pessoa')}</span>
+        ${lista.slice(0, Math.min(limiteLista, 40)).map(a=>`<div class="bi"><span style="color:var(--turq)">${ico('pessoa')}</span>
           <span><span style="display:block;margin-bottom:.22rem">${esc(a.nome.split(' ')[0])} ${esc(a.nome.split(' ')[1]||'')}</span>
           <span class="trilho"><i style="width:${a.ix.total}%;background:${CORES[faixaDe(a.ix.total)]}"></i></span></span>
           <span class="num"><b>${a.ix.total}</b></span></div>`).join('')}
       </div>
       <div class="gcard"><header>${ico('alvo')}<h3>Diversidade de perfis</h3></header>
         <p class="sub">O grupo não precisa de um tipo só de estudante. Cada perfil abre uma frente de trabalho diferente.</p>
-        ${lista.map(a=>`<div class="trilha-el"><span style="color:var(--verde)">${ico(icoDe(a.dim==='Comunitária'?'d_comunitaria':'p_lider_pessoal'),'ico g')}</span>
+        ${lista.slice(0, Math.min(limiteLista, 40)).map(a=>`<div class="trilha-el"><span style="color:var(--verde)">${ico(icoDe(a.dim==='Comunitária'?'d_comunitaria':'p_lider_pessoal'),'ico g')}</span>
           <div><b>${esc(a.nome)}</b><span>Destaque em ${a.forte.toLowerCase()} · a desenvolver: ${a.desenvolver.toLowerCase()} · tendência de ${a.papel.toLowerCase()}</span></div></div>`).join('')}
       </div>
     </div>
@@ -3229,7 +3251,18 @@ const PILARES = [
   prof:['Gestão de projetos sociais','Avaliação de impacto','Sustentabilidade e ESG','Terceiro setor e cooperação']}
 ];
 
+const _CACHE_ESP = new WeakMap();
 function escolherPilares(pct){
+  if(pct && typeof pct === 'object'){
+    const c = _CACHE_ESP.get(pct);
+    if(c) return c;
+    const v = _escolherPilares(pct);
+    _CACHE_ESP.set(pct, v);
+    return v;
+  }
+  return _escolherPilares(pct);
+}
+function _escolherPilares(pct){
   const nota = PILARES.map(p=>({p, v:media(pct,p.chaves)})).sort((a,b)=>b.v-a.v);
   const legado = nota.find(x=>x.p.n==='Legado e Impacto Social');
   const resto = nota.filter(x=>x!==legado);
@@ -4081,11 +4114,24 @@ BANCO.forEach(q=>{ if(!q.pilar) q.pilar = PILAR_ORIGINAL[q.id] || 'Liderança'; 
    Parte 17: pontuação dos pilares — evidência direta + confirmação cruzada
    ===================================================================== */
 
+/* Memoização: escorePilar percorre o banco de 178 questões a cada chamada,
+   e era invocada 581 mil vezes numa única renderização do observatório.
+   O resultado depende só do conjunto de respostas e do pilar. */
+const _CACHE_EP = new WeakMap();
+const _QP = {};
 function escorePilar(resp, nomePilar){
+  let m = _CACHE_EP.get(resp);
+  if(!m){ m = new Map(); _CACHE_EP.set(resp, m); }
+  if(m.has(nomePilar)) return m.get(nomePilar);
+  const _v = _escorePilar(resp, nomePilar);
+  m.set(nomePilar, _v);
+  return _v;
+}
+function _escorePilar(resp, nomePilar){
   const p = PILARES.find(x=>x.n===nomePilar);
   const chaves = new Set(p.chaves);
   let obt = 0, max = 0, n = 0;
-  BANCO.filter(q=>q.pilar===nomePilar).forEach(q=>{
+  (_QP[nomePilar] || (_QP[nomePilar] = BANCO.filter(q=>q.pilar===nomePilar))).forEach(q=>{
     const r = resp[q.id]; if(r===undefined) return;
     let o = 0, m = 0;
     if(q.t==='escala'){
@@ -6321,6 +6367,22 @@ const ESCOLA_DEMO = 'EE Marechal Rondon';
    porque a busca por perfil combina várias características ao mesmo tempo —
    com 67 pessoas, qualquer combinação de três ou mais critérios devolvia
    lista vazia, e o painel parecia quebrado quando estava certo. */
+/* município de cada escola da base de demonstração.
+   A cidade era deduzida por regra fixa; com mais escolas isso não se sustenta. */
+const MUNIC_ESC = {
+ 'EE Marechal Rondon':'Várzea Grande',
+ 'EE Dom Aquino Corrêa':'Cuiabá',
+ 'IFMT Campus Cuiabá':'Cuiabá',
+ 'EE Antônio Cristino Cortes':'Rondonópolis',
+ 'EE Nilo Póvoas':'Sinop',
+ 'EE Frei Ambrósio':'Tangará da Serra',
+ 'EE Onze de Março':'Cáceres',
+ 'EE Vila Rica':'Barra do Garças',
+ 'EE Padre Tiago':'Sorriso',
+ 'EE Campo Aberto':'Primavera do Leste',
+};
+const municipioDe = e => MUNIC_ESC[e] || 'Várzea Grande';
+
 const TURMAS_DEMO = [
  /* EE Marechal Rondon — escola de referência, seis turmas */
  {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:32, perfil:'medio',   semente:5100},
@@ -6341,7 +6403,44 @@ const TURMAS_DEMO = [
  {t:'2º ano Info', serie:'2º ano do Ensino Médio', turno:'Integral', n:28, perfil:'forte', semente:7200, escola:'IFMT Campus Cuiabá'},
  {t:'2º ano Agro', serie:'2º ano do Ensino Médio', turno:'Integral', n:29, perfil:'medio', semente:7300, escola:'IFMT Campus Cuiabá'},
  {t:'3º ano Info', serie:'3º ano do Ensino Médio', turno:'Integral', n:27, perfil:'forte', semente:7400, escola:'IFMT Campus Cuiabá'},
- {t:'3º ano Agro', serie:'3º ano do Ensino Médio', turno:'Integral', n:26, perfil:'medio', semente:7500, escola:'IFMT Campus Cuiabá'}
+ {t:'3º ano Agro', serie:'3º ano do Ensino Médio', turno:'Integral', n:26, perfil:'medio', semente:7500, escola:'IFMT Campus Cuiabá'},
+
+ /* EE Antônio Cristino Cortes — Rondonópolis, polo agroindustrial */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:31, perfil:'medio',  semente:8100, escola:'EE Antônio Cristino Cortes'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Manhã', n:29, perfil:'medio',  semente:8200, escola:'EE Antônio Cristino Cortes'},
+ {t:'2º ano B', serie:'2º ano do Ensino Médio', turno:'Noite', n:24, perfil:'fragil', semente:8300, escola:'EE Antônio Cristino Cortes'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Manhã', n:27, perfil:'forte',  semente:8400, escola:'EE Antônio Cristino Cortes'},
+
+ /* EE Nilo Póvoas — Sinop, norte do estado */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:30, perfil:'medio',  semente:8500, escola:'EE Nilo Póvoas'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Tarde', n:28, perfil:'forte',  semente:8600, escola:'EE Nilo Póvoas'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Manhã', n:26, perfil:'medio',  semente:8700, escola:'EE Nilo Póvoas'},
+ {t:'3º ano B', serie:'3º ano do Ensino Médio', turno:'Noite', n:23, perfil:'fragil', semente:8800, escola:'EE Nilo Póvoas'},
+
+ /* EE Frei Ambrósio — Tangará da Serra */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:29, perfil:'fragil', semente:9100, escola:'EE Frei Ambrósio'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Tarde', n:27, perfil:'medio',  semente:9200, escola:'EE Frei Ambrósio'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Noite', n:22, perfil:'fragil', semente:9300, escola:'EE Frei Ambrósio'},
+
+ /* EE Onze de Março — Cáceres, fronteira */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:28, perfil:'fragil', semente:9400, escola:'EE Onze de Março'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Manhã', n:25, perfil:'medio',  semente:9500, escola:'EE Onze de Março'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Noite', n:21, perfil:'fragil', semente:9600, escola:'EE Onze de Março'},
+
+ /* EE Vila Rica — Barra do Garças, leste */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:27, perfil:'medio',  semente:9700, escola:'EE Vila Rica'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Tarde', n:26, perfil:'medio',  semente:9800, escola:'EE Vila Rica'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Manhã', n:24, perfil:'forte',  semente:9900, escola:'EE Vila Rica'},
+
+ /* EE Padre Tiago — Sorriso, agro de grãos */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:29, perfil:'medio',  semente:10100, escola:'EE Padre Tiago'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Manhã', n:28, perfil:'forte',  semente:10200, escola:'EE Padre Tiago'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Noite', n:23, perfil:'medio',  semente:10300, escola:'EE Padre Tiago'},
+
+ /* EE Campo Aberto — Primavera do Leste */
+ {t:'1º ano A', serie:'1º ano do Ensino Médio', turno:'Manhã', n:26, perfil:'medio',  semente:10400, escola:'EE Campo Aberto'},
+ {t:'2º ano A', serie:'2º ano do Ensino Médio', turno:'Tarde', n:25, perfil:'medio',  semente:10500, escola:'EE Campo Aberto'},
+ {t:'3º ano A', serie:'3º ano do Ensino Médio', turno:'Manhã', n:22, perfil:'forte',  semente:10600, escola:'EE Campo Aberto'}
 ];
 
 const NOMES_POOL = ['Ana','Beatriz','Camila','Daniela','Eduarda','Fernanda','Gabriela','Helena','Isabela','Júlia','Larissa','Mariana','Natália','Olívia','Patrícia','Rafaela','Sofia','Tainá','Valentina','Yasmin',
@@ -6406,7 +6505,7 @@ function escolaDemo(){
       const gerais = [].concat(grupo(pct,max,'pessoal'),grupo(pct,max,'lideranca'),grupo(pct,max,'cognicao'),grupo(pct,max,'etica')).sort((x,y)=>pct[y]-pct[x]);
       alunos.push({nome, nasc:'2008-05-10', sexo:i%2? 'Feminino':'Masculino', serie:T.serie, turno:T.turno,
         escola:T.escola || ESCOLA_DEMO,
-        cidade:(T.escola==='IFMT Campus Cuiabá'||T.escola==='EE Dom Aquino Corrêa')? 'Cuiabá' : 'Várzea Grande',
+        cidade: municipioDe(T.escola || ESCOLA_DEMO),
         turma:T.t, codigo:'MAPA-'+T.semente+i,
         consent:{contato:i%3!==0, banco:i%2===0, pesquisa:true},
         respostas, pct, max, ctx, ix,
@@ -9189,7 +9288,16 @@ function faixaTexto(v){
 }
 const CORFX = v => v>=62? 'var(--verde)' : v>=50? 'var(--turq)' : v>=40? 'var(--ouro)' : '#C86A4A';
 
+const _CACHE_AG = new Map();
 function analiseGeral(alunos){
+  const _ck = (alunos&&alunos.length)? alunos.length+':'+(alunos[0].codigo||'')+':'+(alunos[alunos.length-1].codigo||'') : '0';
+  if(_CACHE_AG.has(_ck)) return _CACHE_AG.get(_ck);
+  const _res = _analiseGeral(alunos);
+  if(_CACHE_AG.size>60) _CACHE_AG.clear();
+  _CACHE_AG.set(_ck, _res);
+  return _res;
+}
+function _analiseGeral(alunos){
   const D = [];
   const push = o => D.push(o);
   const m = (chaves,fonte) => {
@@ -10908,9 +11016,13 @@ function tjVisaoGeral(todosBruto, M){
     </div>`:''}
 
     <div class="card">
-      ${sel.length? sel.map((x,i)=>tjLinhaRanking(x,i,M)).join('')
+      ${sel.length? sel.slice(0, limiteLista).map((x,i)=>tjLinhaRanking(x,i,M)).join('')
         : '<p style="margin:0" class="nota">Nenhum participante nesta faixa.</p>'}
     </div>
+    ${sel.length > limiteLista? `<div style="text-align:center;margin-top:.9rem">
+      <button class="btn btn-sec btn-mini" onclick="limiteLista=${limiteLista+120};render()">Mostrar mais ${Math.min(120, sel.length-limiteLista)} de ${sel.length-limiteLista} restantes</button>
+      <button class="btn btn-sec btn-mini" onclick="limiteLista=99999;render()" style="margin-left:.4rem">Mostrar todos os ${sel.length}</button>
+    </div>`:''}
 
     <div class="aviso" style="margin-top:1.2rem"><b>Como usar esta lista.</b> Ela serve para <b>convidar</b> e para <b>planejar formação</b> — não para excluir. Quem aparece com lacuna não está fora: está com a trilha indicada. E a lista não deve ser afixada nem comunicada aos participantes.</div>`;
 }
@@ -11636,7 +11748,7 @@ const CLUSTERS_DESTAQUE = [
         extras.push({...modelo, nome, pct,
           turma:T.t, serie:T.serie, turno:T.turno,
           escola:T.escola || ESCOLA_DEMO,
-          cidade:(T.escola && T.escola!==ESCOLA_DEMO)? 'Cuiabá' : 'Várzea Grande',
+          cidade: municipioDe(T.escola || ESCOLA_DEMO),
           codigo:'MAPA-D'+String(9000+cont),
           ix: (typeof indices==='function')? indices(pct, modelo.max) : modelo.ix});
       });
@@ -11664,7 +11776,7 @@ const CLUSTERS_DESTAQUE = [
       extras.push({...modelo, nome, pct,
         turma:T.t, serie:T.serie, turno:T.turno,
         escola:T.escola || ESCOLA_DEMO,
-        cidade:(T.escola && T.escola!==ESCOLA_DEMO)? 'Cuiabá' : 'Várzea Grande',
+        cidade: municipioDe(T.escola || ESCOLA_DEMO),
         codigo:'MAPA-P'+String(9500+cont)});
     });
 
@@ -11708,8 +11820,6 @@ const CLUSTERS_DESTAQUE = [
     };
   }
 
-  if(typeof analiseGeral === 'function')  analiseGeral  = memoiza('analiseGeral', analiseGeral);
-  if(typeof mediaPilarT === 'function')   mediaPilarT   = memoiza('mediaPilarT', mediaPilarT);
   if(typeof afinidadeSetores === 'function'){
     const orig = afinidadeSetores, c = new Map();
     afinidadeSetores = function(a){
@@ -11721,4 +11831,301 @@ const CLUSTERS_DESTAQUE = [
     };
   }
 })();
+</script>
+
+<script>
+/* =====================================================================
+   Parte 76: limite de exibição das listas longas
+   A base de demonstração passou de mil participantes; renderizar todas as
+   linhas de uma vez produzia mais de um megabyte de HTML por tela.
+   ===================================================================== */
+let limiteLista = 60;
+
+/* o limite volta ao padrão a cada troca de rota, para não vazar entre telas */
+(function(){
+  const base = render;
+  let ultima = null;
+  render = function(){
+    const rota = (location.hash.replace('#','')||'/').split('?')[0];
+    if(rota !== ultima){ limiteLista = 60; ultima = rota; }
+    return base.apply(this, arguments);
+  };
+})();
+
+
+</script>
+
+<script>
+/* =====================================================================
+   MAPA Fundamental — instrumento para 11 a 13 anos
+   55 questões · 2 etapas · 6º ao 8º ano
+   Não é uma versão reduzida do de 14 a 18: é outro instrumento, com
+   finalidade própria. Alguns construtos ainda não existem nessa idade.
+   ===================================================================== */
+
+const ESCALA_F = ['Nunca','Às vezes','Quase sempre','Sempre'];
+
+const QF  = (id,e,q,w,o={}) => ({id, e, t:'escala', q, w, ...o});
+const QFS = (id,e,q,ops) => ({id, e, t:'situacao', q, ops});
+const QFP = (id,e,q,ops) => ({id, e, t:'pref', q, ops});
+
+const BANCO_F = [
+/* ── Eixo 1 · Meu lugar na escola ────────────────────────── */
+QF('F1.01',1,'Eu me sinto parte da minha turma.',{pertencimento:1}),
+QF('F1.02',1,'Tem alguém na escola que percebe quando eu não estou bem.',{vinculo_adulto:1},{a:1}),
+QF('F1.03',1,'Se eu faltasse uma semana, alguém da escola sentiria minha falta.',{vinculo_adulto:1},{a:1}),
+QF('F1.04',1,'Eu tenho com quem conversar quando alguma coisa dá errado aqui.',{vinculo_adulto:1}),
+QF('F1.05',1,'Eu gosto de chegar na escola de manhã.',{gosto_escola:1}),
+QF('F1.06',1,'Na minha turma, eu tenho amigos de verdade.',{pertencimento:1}),
+QF('F1.07',1,'Eu me sinto seguro na escola.',{seguranca_esc:1}),
+QF('F1.08',1,'Tem algum lugar da escola onde eu não gosto de ficar.',{seguranca_esc:1},{inv:1}),
+QF('F1.09',1,'Eu sei o nome de pelo menos um professor que gosta de mim.',{vinculo_adulto:1}),
+QF('F1.10',1,'O que eu aprendo aqui aparece em outros lugares da minha vida.',{sentido_esc:1},{a:1}),
+QF('F1.11',1,'Eu entendo por que a gente estuda as matérias que estuda.',{sentido_esc:1}),
+QF('F1.12',1,'Quando eu chego atrasado ou falto, alguém me pergunta o que houve.',{vinculo_adulto:1}),
+QF('F1.13',1,'Eu me sinto à vontade para dar minha opinião na sala.',{voz_esc:1}),
+QF('F1.14',1,'Se eu pudesse escolher, eu continuaria estudando nesta escola.',{gosto_escola:1}),
+
+/* ── Eixo 2 · Como eu aprendo ────────────────────────────── */
+QF('F2.01',2,'Quando eu não entendo uma coisa na aula, eu pergunto na hora.',{pergunta:1},{a:1}),
+QF('F2.02',2,'Se eu não entendo, eu procuro de outro jeito depois.',{busca_aprender:1}),
+QF('F2.03',2,'Quando erro uma questão, eu volto para ver onde errei.',{aprende_erro:1}),
+QF('F2.04',2,'Eu peço ajuda quando preciso.',{pede_ajuda:1}),
+QF('F2.05',2,'Antes de uma prova, eu decido o que vou estudar primeiro.',{planeja_estudo:1},{a:1}),
+QF('F2.06',2,'Eu consigo estudar sozinho, sem alguém mandar.',{autonomia_est:1},{a:1}),
+QF('F2.07',2,'Eu anoto o que preciso fazer para não esquecer.',{organiza_est:1},{a:1}),
+QF('F2.08',2,'Eu começo o trabalho antes do último dia.',{antecipa:1},{a:1}),
+QF('F2.09',2,'Eu consigo prestar atenção na aula até o fim.',{atencao:1}),
+QF('F2.10',2,'Em Português, eu acho que consigo aprender o que é ensinado.',{conf_ling:1}),
+QF('F2.11',2,'Em Matemática, eu acho que consigo aprender o que é ensinado.',{conf_mat:1}),
+QF('F2.12',2,'Em Ciências, eu acho que consigo aprender o que é ensinado.',{conf_cien:1}),
+QF('F2.13',2,'Em História e Geografia, eu acho que consigo aprender o que é ensinado.',{conf_hum:1}),
+QF('F2.14',2,'Quando uma matéria é difícil, eu acho que consigo com esforço.',{esforco:1}),
+
+/* ── Eixo 3 · Convivência ────────────────────────────────── */
+QF('F3.01',3,'Eu consigo trabalhar em grupo sem brigar.',{trabalho_grupo:1},{a:1}),
+QF('F3.02',3,'Quando discordo de um colega, eu consigo dizer sem gritar.',{discorda_bem:1}),
+QF('F3.03',3,'Eu percebo quando alguém está triste na turma.',{percebe_outro:1},{a:1}),
+QF('F3.04',3,'Na minha turma, todo mundo é tratado do mesmo jeito.',{justica_turma:1}),
+QF('F3.05',3,'Eu já defendi alguém que estava sendo tratado mal.',{defende:1}),
+QF('F3.06',3,'Eu cumpro a minha parte no trabalho em grupo.',{cumpre_parte:1},{a:1}),
+QFS('F3.07',3,'No trabalho em grupo, um colega não fez a parte dele e a entrega é amanhã. O que você faz?',[
+  {t:'Converso com ele antes de falar com o professor', w:{discorda_bem:2,respeito_f:1}},
+  {t:'Faço a parte dele para não prejudicar o grupo', w:{cumpre_parte:1}},
+  {t:'Aviso o professor', w:{}}]),
+QFS('F3.08',3,'Um colega da sua turma fica sempre sozinho no intervalo. O que você faz?',[
+  {t:'Chamo para ficar comigo e com meus amigos', w:{acolhe:2,percebe_outro:1}},
+  {t:'Converso com ele às vezes', w:{acolhe:1}},
+  {t:'Deixo, porque talvez ele goste de ficar sozinho', w:{}}]),
+QFS('F3.09',3,'Você viu um colega pegando material de outro sem pedir. O que você faz?',[
+  {t:'Falo com ele que aquilo não é certo', w:{honestidade_f:2,defende:1}},
+  {t:'Conto para o dono do material', w:{honestidade_f:1}},
+  {t:'Não falo nada para não criar problema', w:{}}]),
+QFS('F3.10',3,'Dois amigos seus brigaram e os dois querem que você fique do lado deles. O que você faz?',[
+  {t:'Escuto os dois e tento fazer eles conversarem', w:{media_f:2,percebe_outro:1}},
+  {t:'Falo que gosto dos dois e não vou escolher lado', w:{media_f:1}},
+  {t:'Fico do lado de quem eu acho que tem razão', w:{}}]),
+QFS('F3.11',3,'O professor errou uma coisa na explicação e você percebeu. O que você faz?',[
+  {t:'Levanto a mão e pergunto com jeito', w:{voz_esc:2,respeito_f:1}},
+  {t:'Falo com ele depois da aula', w:{voz_esc:1,respeito_f:1}},
+  {t:'Não falo nada', w:{}}]),
+QFS('F3.12',3,'Alguém fez uma piada com o jeito de um colega e a turma riu. O que você faz?',[
+  {t:'Falo que não achei graça', w:{defende:2,respeito_f:1}},
+  {t:'Procuro o colega depois para ver se ele está bem', w:{acolhe:2}},
+  {t:'Não rio, mas também não falo nada', w:{respeito_f:1}}]),
+
+/* ── Eixo 4 · O que eu tenho vontade de fazer ────────────── */
+QF('F4.01',4,'Quando eu fico curioso sobre um assunto, eu procuro saber mais.',{curiosidade_f:1}),
+QF('F4.02',4,'Eu gosto de ajudar a organizar as coisas na turma.',{organiza_grupo:1}),
+QF('F4.03',4,'Já aconteceu de eu começar uma coisa sem ninguém pedir.',{inicia:1},{a:1}),
+QF('F4.04',4,'Eu gostaria de participar de um projeto na escola.',{quer_projeto:1}),
+QF('F4.05',4,'Quando eu prometo alguma coisa, eu cumpro.',{compromisso_f:1},{a:1}),
+QF('F4.06',4,'Eu gosto de explicar para um colega uma coisa que eu já entendi.',{ensina:1}),
+QF('F4.07',4,'Eu tenho vontade de aprender coisas que não são da escola.',{curiosidade_f:1}),
+QF('F4.08',4,'Se a escola abrisse um grupo novo, eu entraria.',{quer_projeto:1}),
+
+/* ── Eixo 5 · Do que eu gosto ────────────────────────────── */
+QFP('F5.01',5,'O que você prefere?',[
+  {t:'Descobrir como uma coisa funciona', w:{inv_investigar:1}},
+  {t:'Inventar uma coisa nova', w:{inv_criar:1}}]),
+QFP('F5.02',5,'Você gosta mais de:',[
+  {t:'Fazer sozinho', w:{inv_sozinho:1}},
+  {t:'Fazer junto com outras pessoas', w:{inv_junto:1}}]),
+QFP('F5.03',5,'Do que você gosta mais?',[
+  {t:'Escrever e ler', w:{inv_palavra:1}},
+  {t:'Calcular e resolver', w:{inv_numero:1}},
+  {t:'Desenhar e criar', w:{inv_criar:1}},
+  {t:'Construir e montar', w:{inv_construir:1}}]),
+QFP('F5.04',5,'Do que você mais gosta na escola?',[
+  {t:'Das aulas', w:{inv_estudar:1}},
+  {t:'Dos amigos', w:{inv_junto:1}},
+  {t:'Dos projetos e atividades', w:{inv_criar:1}},
+  {t:'Do esporte', w:{inv_corpo:1}}]),
+QFP('F5.05',5,'Fora da escola, o que você mais gosta de fazer?',[
+  {t:'Ler, assistir, jogar', w:{inv_investigar:1}},
+  {t:'Esporte e movimento', w:{inv_corpo:1}},
+  {t:'Criar, desenhar, tocar', w:{inv_criar:1}},
+  {t:'Estar com gente', w:{inv_junto:1}}]),
+QFP('F5.06',5,'Se você pudesse aprender qualquer coisa nas férias, seria:',[
+  {t:'Alguma coisa de tecnologia', w:{inv_construir:1}},
+  {t:'Alguma coisa de arte ou música', w:{inv_criar:1}},
+  {t:'Alguma coisa de esporte', w:{inv_corpo:1}},
+  {t:'Alguma coisa sobre gente e o mundo', w:{inv_investigar:1}}]),
+QFP('F5.07',5,'Qual matéria você escolheria se pudesse ter só três?',[
+  {t:'Português e Artes', w:{inv_palavra:1}},
+  {t:'Matemática e Ciências', w:{inv_numero:1}},
+  {t:'História e Geografia', w:{inv_investigar:1}},
+  {t:'Educação Física', w:{inv_corpo:1}}]),
+];
+
+/* contexto escolar — descreve a escola, não pontua o estudante */
+const CTX_F = [
+ {id:'FC.01', d:'ensino', q:'Os professores explicam o que a gente precisa aprender antes de começar.'},
+ {id:'FC.02', d:'ensino', q:'Quando eu erro, o professor me mostra como fazer diferente.'},
+ {id:'FC.03', d:'ensino', q:'Alguém já me ensinou como estudar, não só o que estudar.'},
+ {id:'FC.04', d:'ensino', q:'As aulas têm a ver com coisas da vida real.'},
+ {id:'FC.05', d:'ensino', q:'Eu posso escolher alguma coisa sobre o que estudo ou como faço.'},
+ {id:'FC.06', d:'ambiente', q:'Na minha escola, os alunos se respeitam.'},
+ {id:'FC.07', d:'ambiente', q:'Os adultos da escola tratam os alunos com respeito.'},
+ {id:'FC.08', d:'ambiente', q:'Quando a gente reclama de alguma coisa, alguém escuta.'},
+ {id:'FC.09', d:'ambiente', q:'Quando um aluno está indo mal, a escola faz alguma coisa.'},
+ {id:'FC.10', d:'ambiente', q:'A escola é um lugar organizado.'},
+];
+
+const IND_F = {
+ pertencimento:['Fazer parte da turma',1], vinculo_adulto:['Ter um adulto de referência',1],
+ gosto_escola:['Gostar de estar na escola',1], seguranca_esc:['Sentir-se seguro',1],
+ sentido_esc:['Ver sentido no que aprende',1], voz_esc:['Sentir que pode falar',1],
+ pergunta:['Perguntar quando não entende',2], busca_aprender:['Procurar de outro jeito',2],
+ aprende_erro:['Voltar ao erro',2], pede_ajuda:['Pedir ajuda',2],
+ planeja_estudo:['Planejar o estudo',2], autonomia_est:['Estudar sozinho',2],
+ organiza_est:['Anotar e organizar',2], antecipa:['Começar antes',2], atencao:['Manter a atenção',2],
+ conf_ling:['Confiança em Português',2], conf_mat:['Confiança em Matemática',2],
+ conf_cien:['Confiança em Ciências',2], conf_hum:['Confiança em Humanas',2],
+ esforco:['Acreditar que consegue com esforço',2],
+ trabalho_grupo:['Trabalhar em grupo',3], discorda_bem:['Discordar sem brigar',3],
+ percebe_outro:['Perceber o outro',3], justica_turma:['Ver justiça na turma',3],
+ defende:['Defender quem precisa',3], cumpre_parte:['Cumprir a própria parte',3],
+ respeito_f:['Respeito',3], acolhe:['Acolher',3], honestidade_f:['Honestidade',3], media_f:['Ajudar a resolver',3],
+ curiosidade_f:['Curiosidade',4], organiza_grupo:['Organizar o grupo',4], inicia:['Começar sozinho',4],
+ quer_projeto:['Vontade de participar',4], compromisso_f:['Cumprir o que promete',4], ensina:['Explicar para o colega',4],
+ inv_investigar:['Investigar',5], inv_criar:['Criar',5], inv_construir:['Construir',5],
+ inv_palavra:['Palavras',5], inv_numero:['Números',5], inv_corpo:['Movimento',5],
+ inv_junto:['Com gente',5], inv_sozinho:['Sozinho',5], inv_estudar:['Estudar',5],
+};
+
+const EIXOS_F = [
+ {n:1, t:'Meu lugar na escola', cor:'#0FA3B1', d:'O quanto você se sente parte, seguro e ouvido aqui.'},
+ {n:2, t:'Como eu aprendo',     cor:'#2FA36B', d:'O que você faz quando não entende, e como se organiza.'},
+ {n:3, t:'Convivência',         cor:'#E7A81F', d:'Como você fica com os colegas, e o que faz num desentendimento.'},
+ {n:4, t:'O que eu tenho vontade de fazer', cor:'#C86A4A', d:'Curiosidade, iniciativa e vontade de participar.'},
+ {n:5, t:'Do que eu gosto',     cor:'#7C6BB0', d:'Suas preferências. Aqui não existe resposta melhor.'},
+];
+
+const JORNADAS_F = [
+ {n:1, titulo:'A escola e eu', sub:'Como é estar aqui, e como você aprende', tempo:'15 minutos', eixos:[1,2]},
+ {n:2, titulo:'Eu e os outros', sub:'Convivência, vontade de fazer e do que você gosta', tempo:'15 minutos', eixos:[3,4,5], ctx:true},
+];
+
+/* a idade define o instrumento */
+function instrumentoDe(idade){ return (idade >= 11 && idade <= 13) ? 'fundamental' : 'medio'; }
+const ehFundamental = () => !!(S.aluno && S.aluno.instrumento === 'fundamental');
+</script>
+
+<script>
+/* =====================================================================
+   Integração do MAPA Fundamental ao fluxo existente
+   A idade define o instrumento; o restante da plataforma se adapta.
+   ===================================================================== */
+
+/* o cadastro passa a gravar qual instrumento se aplica */
+(function(){
+  const orig = coletaCad;
+  coletaCad = function(){
+    orig.apply(this, arguments);
+    const i = idadeDe(S.aluno && S.aluno.nasc);
+    if(i != null && !isNaN(i)) S.aluno.instrumento = instrumentoDe(i);
+  };
+})();
+
+/* questões da etapa — qs é const, então o desvio acontece na origem */
+function qsF(j){
+  const J = JORNADAS_F[j-1];
+  if(!J) return [];
+  const base = BANCO_F.filter(q=>J.eixos.includes(q.e));
+  return J.ctx ? [...base, ...CTX_F.map(c=>({...c, t:'ctx', e:0, j}))] : base;
+}
+/* usado por todo o fluxo de aplicação */
+function questoesDaEtapa(j){ return ehFundamental()? qsF(j) : qs(j); }
+
+/* número de etapas */
+function totalEtapas(){ return ehFundamental()? JORNADAS_F.length : JORNADAS.length; }
+function jornadaAtual(j){ return ehFundamental()? JORNADAS_F[j-1] : JORNADAS[j-1]; }
+
+/* cálculo dos indicadores do Fundamental */
+function calcularF(resp){
+  const acum = {}, cont = {};
+  BANCO_F.forEach(q=>{
+    const r = resp[q.id];
+    if(r === undefined || r === null) return;
+    if(q.t === 'escala'){
+      let v = r * (100/(ESCALA_F.length-1));
+      if(q.inv) v = 100 - v;
+      for(const k in q.w){ acum[k]=(acum[k]||0)+v*q.w[k]; cont[k]=(cont[k]||0)+q.w[k]; }
+    } else {
+      const op = (q.ops||[])[r]; if(!op) return;
+      const maxP = Math.max(1, ...(q.ops||[]).flatMap(o=>Object.values(o.w||{})));
+      new Set((q.ops||[]).flatMap(o=>Object.keys(o.w||{}))).forEach(k=>{
+        acum[k]=(acum[k]||0)+((op.w||{})[k]||0)/maxP*100; cont[k]=(cont[k]||0)+1;
+      });
+    }
+  });
+  const pct = {};
+  for(const k in acum) if(cont[k] >= 1) pct[k] = Math.round(acum[k]/cont[k]);
+  return pct;
+}
+function porEixoF(pct){
+  /* media() nesta plataforma recebe (pct, chaves) — não um vetor */
+  const r = {};
+  EIXOS_F.forEach(e=>{
+    const ks = Object.keys(IND_F).filter(k=>IND_F[k][1]===e.n && pct[k]!==undefined);
+    if(ks.length) r[e.n] = media(pct, ks);
+  });
+  return r;
+}
+function ctxF(resp){
+  const a = {}, c = {};
+  CTX_F.forEach(x=>{
+    const r = resp[x.id]; if(r===undefined) return;
+    a[x.d]=(a[x.d]||0)+r*(100/(ESCALA_F.length-1)); c[x.d]=(c[x.d]||0)+1;
+  });
+  const d={}; for(const k in a) d[k]=Math.round(a[k]/c[k]); return d;
+}
+
+/* faixa de leitura — sem número para o estudante */
+function faixaF(v){
+  if(v >= 70) return {t:'aparece bastante', c:'var(--verde)'};
+  if(v >= 50) return {t:'aparece', c:'var(--turq)'};
+  if(v >= 35) return {t:'aparece às vezes', c:'var(--ouro)'};
+  return {t:'ainda aparece pouco', c:'var(--tinta2)'};
+}
+</script>
+
+<script>
+/* =====================================================================
+   Ajustes de contagem para o instrumento do Fundamental
+   respondidas() e totalQuestoes() são const e filtram o banco de 178;
+   aqui recebem versões que respeitam o instrumento em uso.
+   ===================================================================== */
+function respondidasEtapa(j){
+  return questoesDaEtapa(j).filter(q=>S.respostas[q.id]!==undefined).length;
+}
+function totalDoInstrumento(){
+  return ehFundamental()? (BANCO_F.length + CTX_F.length) : BANCO.length;
+}
+function tudoRespondido(){
+  const n = totalEtapas();
+  for(let j=1;j<=n;j++) if(respondidasEtapa(j) < questoesDaEtapa(j).length) return false;
+  return true;
+}
 </script>
